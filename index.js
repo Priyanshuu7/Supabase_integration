@@ -1,3 +1,4 @@
+// Import required dependencies
 import express from 'express';
 import {createClient} from '@supabase/supabase-js';
 import {PrismaClient} from '@prisma/client';
@@ -6,18 +7,23 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
+// Initialize Express app and set port
 const app = express();
 const PORT = 3000;
 const prisma = new PrismaClient();
 
-// Initialize Supabase client
+// Initialize Supabase clients - one for regular auth and one for admin
+// operations
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 const supabaseAdmin = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_SERVICE_ROLE_KEY);
 
-// Middleware to parse JSON bodies
+// Enable JSON parsing middleware
 app.use(express.json());
 
-// Add this middleware function after your existing imports and before routes
+/**
+ * Middleware to authenticate user using Supabase token
+ * Extracts token from Authorization header and verifies it
+ */
 const authenticateUser = async(req, res, next) => {
     try {
         const authHeader = req.headers['authorization'];
@@ -46,7 +52,6 @@ const authenticateUser = async(req, res, next) => {
                 .json({error: 'Invalid token'});
         }
 
-        // Add user to request object
         req.user = user;
         next();
     } catch (error) {
@@ -56,41 +61,43 @@ const authenticateUser = async(req, res, next) => {
     }
 };
 
-// Sign up endpoint
+/**
+ * User signup endpoint
+ * Creates new user in both Supabase and Prisma
+ */
 app.post('/signup', async(req, res) => {
     try {
         const {email, password} = req.body;
 
-        // First check if user exists in Supabase
-        const { data: existingUser } = await supabase
+        // Check if user exists in Supabase
+        const {data: existingUser} = await supabase
             .auth
             .admin
-            .listUsers({
-                filters: { email }
-            });
+            .listUsers({filters: {
+                    email
+                }});
 
-        if (existingUser?.length > 0) {
-            return res.status(400).json({
-                success: false,
-                error: 'User already exists with this email. Please login instead.'
-            });
+        if (existingUser
+            ?.length > 0) {
+            return res
+                .status(400)
+                .json({success: false, error: 'User already exists with this email. Please login instead.'});
         }
 
         // Check if user exists in Prisma
-        const existingPrismaUser = await prisma.user.findUnique({
-            where: {
-                email: email
-            }
-        });
+        const existingPrismaUser = await prisma
+            .user
+            .findUnique({where: {
+                    email
+                }});
 
         if (existingPrismaUser) {
-            return res.status(400).json({
-                success: false,
-                error: 'User already exists with this email. Please login instead.'
-            });
+            return res
+                .status(400)
+                .json({success: false, error: 'User already exists with this email. Please login instead.'});
         }
 
-        // Create user in Supabase Auth
+        // Create user in Supabase
         const {data: authData, error: authError} = await supabase
             .auth
             .signUp({email, password});
@@ -98,13 +105,13 @@ app.post('/signup', async(req, res) => {
         if (authError) 
             throw authError;
         
-        // Create user in Prisma database
+        // Create user in Prisma
         const user = await prisma
             .user
             .create({
                 data: {
                     id: authData.user.id,
-                    email: email
+                    email
                 }
             });
 
@@ -122,7 +129,10 @@ app.post('/signup', async(req, res) => {
     }
 });
 
-// Sign in endpoint
+/**
+ * User signin endpoint
+ * Authenticates user and returns session data
+ */
 app.post('/signin', async(req, res) => {
     try {
         const {email, password} = req.body;
@@ -134,7 +144,7 @@ app.post('/signin', async(req, res) => {
         if (authError) 
             throw authError;
         
-        // Get user from database or create if doesn't exist
+        // Find or create user in Prisma
         let user = await prisma
             .user
             .findUnique({
@@ -149,7 +159,7 @@ app.post('/signin', async(req, res) => {
                 .create({
                     data: {
                         id: authData.user.id,
-                        email: email
+                        email
                     }
                 });
         }
@@ -170,26 +180,27 @@ app.post('/signin', async(req, res) => {
     }
 });
 
-// Add the protected post creation route
+/**
+ * Create post endpoint
+ * Requires authentication
+ */
 app.post('/post', authenticateUser, async(req, res) => {
     try {
         const {title, content} = req.body;
 
-        // Validate input
         if (!title || !content) {
             return res
                 .status(400)
                 .json({success: false, error: 'Title and content are required'});
         }
 
-        // Create post in database
         const post = await prisma
             .post
             .create({
                 data: {
                     title,
                     content,
-                    authorId: req.user.id, // Link post to authenticated user
+                    authorId: req.user.id
                 }
             });
 
@@ -201,19 +212,20 @@ app.post('/post', authenticateUser, async(req, res) => {
     }
 });
 
-// Add the protected comment creation route
+/**
+ * Create comment endpoint
+ * Requires authentication
+ */
 app.post('/comment', authenticateUser, async(req, res) => {
     try {
         const {content, postId} = req.body;
 
-        // Validate input
         if (!content || !postId) {
             return res
                 .status(400)
                 .json({success: false, error: 'Content and postId are required'});
         }
 
-        // Check if post exists
         const post = await prisma
             .post
             .findUnique({
@@ -228,14 +240,13 @@ app.post('/comment', authenticateUser, async(req, res) => {
                 .json({success: false, error: 'Post not found'});
         }
 
-        // Create comment in database
         const comment = await prisma
             .comment
             .create({
                 data: {
                     content,
-                    authorId: req.user.id, // Link comment to authenticated user
-                    postId, // Link comment to post
+                    authorId: req.user.id,
+                    postId
                 },
                 include: {
                     author: {
@@ -259,76 +270,78 @@ app.post('/comment', authenticateUser, async(req, res) => {
     }
 });
 
-// Get post details by ID route
-app.get('/post/:id', async (req, res) => {
+/**
+ * Get post by ID endpoint
+ * Returns post with author and comments
+ */
+app.get('/post/:id', async(req, res) => {
     try {
         const postId = req.params.id;
 
-        const post = await prisma.post.findUnique({
-            where: {
-                id: postId
-            },
-            include: {
-                author: {
-                    select: {
-                        id: true,
-                        email: true
-                    }
+        const post = await prisma
+            .post
+            .findUnique({
+                where: {
+                    id: postId
                 },
-                comments: {
-                    include: {
-                        author: {
-                            select: {
-                                id: true,
-                                email: true
+                include: {
+                    author: {
+                        select: {
+                            id: true,
+                            email: true
+                        }
+                    },
+                    comments: {
+                        include: {
+                            author: {
+                                select: {
+                                    id: true,
+                                    email: true
+                                }
                             }
                         }
                     }
                 }
-            }
-        });
+            });
 
         if (!post) {
-            return res.status(404).json({
-                success: false,
-                error: 'Post not found'
-            });
+            return res
+                .status(404)
+                .json({success: false, error: 'Post not found'});
         }
 
-        res.json({
-            success: true,
-            post
-        });
+        res.json({success: true, post});
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+        res
+            .status(500)
+            .json({success: false, error: error.message});
     }
 });
 
-// Admin test endpoint - Get all users
-app.get('/admin/users', authenticateUser, async (req, res) => {
+/**
+ * Admin endpoint to list all users
+ * Requires authentication and admin privileges
+ */
+app.get('/admin/users', authenticateUser, async(req, res) => {
     try {
-        // First verify if requesting user is an admin
-        const adminEmails = ['rajakronaldo@gmail.com']; // Store this in env or database in production
+        const adminEmails = ['rajakronaldo@gmail.com'];
         if (!adminEmails.includes(req.user.email)) {
-            return res.status(403).json({
-                success: false,
-                error: 'Unauthorized: Admin access required'
-            });
+            return res
+                .status(403)
+                .json({success: false, error: 'Unauthorized: Admin access required'});
         }
 
-        // Get all users from Supabase
-        const { data: supabaseUsers, error: supabaseError } = await supabaseAdmin
+        const {data: supabaseUsers, error: supabaseError} = await supabaseAdmin
             .auth
             .admin
             .listUsers();
 
-        if (supabaseError) throw supabaseError;
-
-        // Get all users from Prisma
-        const prismaUsers = await prisma.user.findMany();
+        if (supabaseError) 
+            throw supabaseError;
+        
+        const prismaUsers = await prisma
+            .user
+            .findMany();
 
         res.json({
             success: true,
@@ -336,72 +349,80 @@ app.get('/admin/users', authenticateUser, async (req, res) => {
                 supabaseUsers: supabaseUsers.users,
                 prismaUsers,
                 totalUsers: supabaseUsers.users.length,
-                userEmails: supabaseUsers.users.map(user => user.email)
+                userEmails: supabaseUsers
+                    .users
+                    .map(user => user.email)
             }
         });
 
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+        res
+            .status(500)
+            .json({success: false, error: error.message});
     }
 });
 
-// Admin test endpoint - Get user details
-app.get('/admin/user/:email', authenticateUser, async (req, res) => {
+/**
+ * Admin endpoint to get user details by email
+ * Requires authentication and admin privileges
+ */
+app.get('/admin/user/:email', authenticateUser, async(req, res) => {
     try {
-        // Verify admin
         const adminEmails = ['rajakronaldo@gmail.com'];
         if (!adminEmails.includes(req.user.email)) {
-            return res.status(403).json({
-                success: false,
-                error: 'Unauthorized: Admin access required'
-            });
+            return res
+                .status(403)
+                .json({success: false, error: 'Unauthorized: Admin access required'});
         }
 
         const userEmail = req.params.email;
 
-        // Get user from Supabase
-        const { data: supabaseUsers, error: supabaseError } = await supabaseAdmin
+        const {data: supabaseUsers, error: supabaseError} = await supabaseAdmin
             .auth
             .admin
             .listUsers({
-                filters: { email: userEmail }
+                filters: {
+                    email: userEmail
+                }
             });
 
-        if (supabaseError) throw supabaseError;
-
-        // Get user from Prisma
-        const prismaUser = await prisma.user.findUnique({
-            where: { email: userEmail },
-            include: {
-                posts: true,
-                comments: true
-            }
-        });
+        if (supabaseError) 
+            throw supabaseError;
+        
+        const prismaUser = await prisma
+            .user
+            .findUnique({
+                where: {
+                    email: userEmail
+                },
+                include: {
+                    posts: true,
+                    comments: true
+                }
+            });
 
         res.json({
             success: true,
             data: {
                 supabaseUser: supabaseUsers[0] || null,
                 prismaUser,
-                userActivity: prismaUser ? {
-                    totalPosts: prismaUser.posts.length,
-                    totalComments: prismaUser.comments.length
-                } : null
+                userActivity: prismaUser
+                    ? {
+                        totalPosts: prismaUser.posts.length,
+                        totalComments: prismaUser.comments.length
+                    }
+                    : null
             }
         });
 
     } catch (error) {
-        res.status(500).json({
-            success: false,
-            error: error.message
-        });
+        res
+            .status(500)
+            .json({success: false, error: error.message});
     }
 });
 
-// Graceful shutdown
+// Handle graceful shutdown
 process.on('SIGINT', async() => {
     await Promise.all([
         prisma.$disconnect(),
@@ -412,6 +433,7 @@ process.on('SIGINT', async() => {
     process.exit();
 });
 
+// Start the server
 app.listen(PORT, () => {
     console.log(`Server running on http://localhost:${PORT}`);
 });
