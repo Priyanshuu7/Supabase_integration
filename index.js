@@ -9,7 +9,6 @@ dotenv.config();
 
 // Initialize Express app and set port
 const app = express();
-const PORT = 3000;
 const prisma = new PrismaClient();
 
 // Initialize Supabase clients - one for regular auth and one for admin operations
