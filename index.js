@@ -3,7 +3,6 @@ import express from 'express';
 import {createClient} from '@supabase/supabase-js';
 import {PrismaClient} from '@prisma/client';
 import dotenv from 'dotenv';
-import authenticateUser from './auth.js';
 
 // Load environment variables
 dotenv.config();
@@ -19,6 +18,43 @@ const supabaseAdmin = createClient(process.env.SUPABASE_URL, process.env.SUPABAS
 
 // Enable JSON parsing middleware
 app.use(express.json());
+
+const authenticateUser = async(req, res, next) => {
+    try {
+        const authHeader = req.headers['authorization'];
+        if (!authHeader) {
+            return res
+                .status(401)
+                .json({error: 'No authorization header'});
+        }
+
+        const token = authHeader.split(' ')[1];
+        if (!token) {
+            return res
+                .status(401)
+                .json({error: 'No token provided'});
+        }
+
+        const {data: {
+                user
+            }, error} = await supabase
+            .auth
+            .getUser(token);
+
+        if (error) {
+            return res
+                .status(401)
+                .json({error: 'Invalid token'});
+        }
+
+        req.user = user;
+        next();
+    } catch (error) {
+        res
+            .status(401)
+            .json({error: 'Authentication failed'});
+    }
+};
 
 /**
  * User signup endpoint
